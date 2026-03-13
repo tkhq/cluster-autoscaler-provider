@@ -1,0 +1,4 @@
+/region-cluster-autoscaler
+/.cache/
+/bin/
+PROMPT.md
