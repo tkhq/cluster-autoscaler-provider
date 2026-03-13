@@ -54,6 +54,7 @@ var (
 		"One or more definition(s) of node group auto-discovery. AWS matches by ASG tags, for example `asg:tag=tagKey,anotherTagKey`.")
 
 	awsUseStaticInstanceList = flag.Bool("aws-use-static-instance-list", false, "Use the generated static EC2 instance type list instead of calling AWS APIs at startup.")
+	dryRun                   = flag.Bool("dry-run", false, "Enable dry-run mode: initialize clients and serve gRPC, but log mutating actions instead of performing them.")
 )
 
 func main() {
@@ -63,7 +64,13 @@ func main() {
 
 	server := newServer()
 	provider := buildAWSCloudProvider()
-	protos.RegisterCloudProviderServer(server, upstreamwrapper.NewCloudProviderGrpcWrapper(provider))
+	var grpcService protos.CloudProviderServer
+	grpcService = upstreamwrapper.NewCloudProviderGrpcWrapper(provider)
+	if *dryRun {
+		klog.Infof("dry-run mode enabled: mutating operations will be logged but not executed")
+		grpcService = newDryRunWrapper(grpcService)
+	}
+	protos.RegisterCloudProviderServer(server, grpcService)
 
 	listener, err := net.Listen("tcp", *address)
 	if err != nil {

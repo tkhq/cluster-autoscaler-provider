@@ -1,0 +1,31 @@
+name: CA Integration Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      k8s_version:
+        description: 'Kubernetes version for envtest'
+        required: true
+        default: '1.35.0'
+        type: string
+
+env:
+  GO_VERSION: "1.25"
+
+jobs:
+  integration-test:
+    name: CA Integration Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - name: Install setup-envtest
+        run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
+      - name: Run Integration Tests
+        run: make ca-test-integration ENVTEST_K8S_VERSION=${{ inputs.k8s_version }}

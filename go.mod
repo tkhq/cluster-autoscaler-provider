@@ -15,15 +15,17 @@ require (
 	google.golang.org/grpc v1.78.0
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/gcfg.v1 v1.2.3 // indirect
-	k8s.io/api v0.35.0 // indirect
-	k8s.io/apimachinery v0.35.0 // indirect
+	k8s.io/api v0.35.0
+	k8s.io/apimachinery v0.35.0
 	k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260311210335-74ad72c95a98 // tracks git tag cluster-autoscaler-1.35.0
-	k8s.io/client-go v0.35.0 // indirect
+	k8s.io/client-go v0.35.0
 	k8s.io/cloud-provider-aws v1.35.0 // indirect
 	k8s.io/component-base v0.35.0
 	k8s.io/klog/v2 v2.130.1
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4 // indirect
 )
+
+require sigs.k8s.io/controller-runtime v0.22.4
 
 require (
 	cel.dev/expr v0.24.0 // indirect
@@ -132,7 +134,6 @@ require (
 	k8s.io/kube-scheduler v0.0.0 // indirect
 	k8s.io/kubelet v0.35.0 // indirect
 	k8s.io/kubernetes v1.35.0 // indirect
-	sigs.k8s.io/controller-runtime v0.22.4 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
