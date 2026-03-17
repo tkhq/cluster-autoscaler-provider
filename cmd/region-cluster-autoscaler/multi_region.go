@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
@@ -12,6 +13,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
+	klog "k8s.io/klog/v2"
 )
 
 var awsRegionEnvMu sync.Mutex
@@ -32,7 +34,6 @@ type regionalNodeGroup struct {
 }
 
 func parseAWSRegions(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
 	regions := make([]string, 0, len(values))
 
 	for _, value := range values {
@@ -41,15 +42,12 @@ func parseAWSRegions(values []string) []string {
 			if region == "" {
 				continue
 			}
-			if _, ok := seen[region]; ok {
-				continue
-			}
-			seen[region] = struct{}{}
 			regions = append(regions, region)
 		}
 	}
 
-	return regions
+	slices.Sort(regions)
+	return slices.Compact(regions)
 }
 
 func buildProviderForRegion(
@@ -91,16 +89,19 @@ func newMultiRegionCloudProvider(providers []regionalProvider) cloudprovider.Clo
 
 func regionFromProviderID(providerID string) string {
 	if !strings.HasPrefix(providerID, "aws:///") {
+		klog.Warningf("Failed to parse AWS region from providerID %q: does not have aws:/// prefix", providerID)
 		return ""
 	}
 
 	parts := strings.Split(strings.TrimPrefix(providerID, "aws:///"), "/")
 	if len(parts) < 2 {
+		klog.Warningf("Failed to parse AWS region from providerID %q: no zone info available", providerID)
 		return ""
 	}
 
 	zone := strings.TrimSpace(parts[0])
 	if len(zone) < 2 {
+		klog.Warningf("Failed to parse AWS region from providerID %q: zone %q is too short", providerID, zone)
 		return ""
 	}
 
@@ -110,6 +111,7 @@ func regionFromProviderID(providerID string) string {
 func (p *multiRegionCloudProvider) providerForNode(node *apiv1.Node) cloudprovider.CloudProvider {
 	region := regionFromProviderID(node.Spec.ProviderID)
 	if region == "" {
+		klog.Warningf("Failed to find provider for node %q: unable to parse region from providerID %q", node.Name, node.Spec.ProviderID)
 		return nil
 	}
 
@@ -184,6 +186,12 @@ func (p *multiRegionCloudProvider) GetAvailableMachineTypes() ([]string, error) 
 	return p.primary.GetAvailableMachineTypes()
 }
 
+// NewNodeGroup builds a theoretical node group based on the node definition
+// provided. It is used by the Cluster Autoscaler's Node Auto-Provisioning (NAP)
+// feature to dynamically create new node groups.
+// Multi-region NAP is not currently supported because the upstream interface
+// does not provide enough context (like a target region) to safely delegate
+// node group creation without making assumptions.
 func (p *multiRegionCloudProvider) NewNodeGroup(
 	machineType string,
 	labels map[string]string,
@@ -191,8 +199,7 @@ func (p *multiRegionCloudProvider) NewNodeGroup(
 	taints []apiv1.Taint,
 	extraResources map[string]resource.Quantity,
 ) (cloudprovider.NodeGroup, error) {
-	group, err := p.primary.NewNodeGroup(machineType, labels, systemLabels, taints, extraResources)
-	return wrapRegionalNodeGroup(p.providers[0].region, group), err
+	return nil, cloudprovider.ErrNotImplemented
 }
 
 func (p *multiRegionCloudProvider) GetResourceLimiter() (*cloudprovider.ResourceLimiter, error) {
@@ -299,9 +306,12 @@ func (g *regionalNodeGroup) Exist() bool {
 	return g.group.Exist()
 }
 
+// Create provisions the NodeGroup on the cloud provider. It is the second
+// phase of the Cluster Autoscaler's Node Auto-Provisioning (NAP) feature
+// after NewNodeGroup. Since we do not currently support multi-region NAP,
+// we return ErrNotImplemented here as well.
 func (g *regionalNodeGroup) Create() (cloudprovider.NodeGroup, error) {
-	group, err := g.group.Create()
-	return wrapRegionalNodeGroup(g.region, group), err
+	return nil, cloudprovider.ErrNotImplemented
 }
 
 func (g *regionalNodeGroup) Delete() error {

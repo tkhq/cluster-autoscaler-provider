@@ -17,7 +17,7 @@ func TestParseAWSRegions(t *testing.T) {
 	t.Parallel()
 
 	got := parseAWSRegions([]string{"us-east-1, us-west-2", "us-east-1", "eu-west-1"})
-	want := []string{"us-east-1", "us-west-2", "eu-west-1"}
+	want := []string{"eu-west-1", "us-east-1", "us-west-2"}
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parseAWSRegions() = %v, want %v", got, want)
