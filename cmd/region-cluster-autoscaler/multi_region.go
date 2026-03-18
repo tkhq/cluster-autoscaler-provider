@@ -64,9 +64,14 @@ func buildProviderForRegion(
 	defer func() {
 		if hadPrevious {
 			_ = os.Setenv("AWS_REGION", previous)
-			return
+		} else {
+			_ = os.Unsetenv("AWS_REGION")
 		}
-		_ = os.Unsetenv("AWS_REGION")
+
+		if r := recover(); r != nil {
+			klog.Errorf("panic in buildProviderForRegion for region %q: %v", region, r)
+			panic(r)
+		}
 	}()
 
 	// Upstream's AWS provider is single-region and does not expose a public
@@ -145,15 +150,21 @@ func (p *multiRegionCloudProvider) NodeGroups() []cloudprovider.NodeGroup {
 func (p *multiRegionCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
 	if provider := p.providerForNode(node); provider != nil {
 		group, err := provider.NodeGroupForNode(node)
-		if group != nil || err != nil {
-			return wrapRegionalNodeGroup(regionFromProviderID(node.Spec.ProviderID), group), err
+		if err != nil {
+			return nil, err
+		}
+		if group != nil {
+			return wrapRegionalNodeGroup(regionFromProviderID(node.Spec.ProviderID), group), nil
 		}
 	}
 
 	for _, regional := range p.providers {
 		group, err := regional.provider.NodeGroupForNode(node)
-		if group != nil || err != nil {
-			return wrapRegionalNodeGroup(regional.region, group), err
+		if err != nil {
+			return nil, err
+		}
+		if group != nil {
+			return wrapRegionalNodeGroup(regional.region, group), nil
 		}
 	}
 
@@ -163,15 +174,21 @@ func (p *multiRegionCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprov
 func (p *multiRegionCloudProvider) HasInstance(node *apiv1.Node) (bool, error) {
 	if provider := p.providerForNode(node); provider != nil {
 		found, err := provider.HasInstance(node)
-		if found || err != nil {
-			return found, err
+		if err != nil {
+			return false, err
+		}
+		if found {
+			return true, nil
 		}
 	}
 
 	for _, regional := range p.providers {
 		found, err := regional.provider.HasInstance(node)
-		if found || err != nil {
-			return found, err
+		if err != nil {
+			return false, err
+		}
+		if found {
+			return true, nil
 		}
 	}
 
