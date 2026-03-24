@@ -52,6 +52,9 @@ var (
 	nodeGroupAutoDiscoveryFlag = registerMultiStringFlag(
 		"node-group-auto-discovery",
 		"One or more definition(s) of node group auto-discovery. AWS matches by ASG tags, for example `asg:tag=tagKey,anotherTagKey`.")
+	awsRegionsFlag = registerMultiStringFlag(
+		"aws-region",
+		"One or more AWS regions to query. Can be repeated or provided as a comma-separated list. When omitted, the default AWS region resolution is used.")
 
 	awsUseStaticInstanceList = flag.Bool("aws-use-static-instance-list", false, "Use the generated static EC2 instance type list instead of calling AWS APIs at startup.")
 	dryRun                   = flag.Bool("dry-run", false, "Enable dry-run mode: initialize clients and serve gRPC, but log mutating actions instead of performing them.")
@@ -130,5 +133,20 @@ func buildAWSCloudProvider() cloudprovider.CloudProvider {
 	}
 
 	resourceLimiter := cloudprovider.NewResourceLimiter(nil, nil)
-	return upstreamaws.BuildAWS(opts, discovery, resourceLimiter)
+	regions := parseAWSRegions(*awsRegionsFlag)
+	if len(regions) == 0 {
+		return upstreamaws.BuildAWS(opts, discovery, resourceLimiter)
+	}
+
+	providers := make([]regionalProvider, 0, len(regions))
+	for _, region := range regions {
+		providers = append(providers, regionalProvider{
+			region: region,
+			provider: buildProviderForRegion(region, func() cloudprovider.CloudProvider {
+				return upstreamaws.BuildAWS(opts, discovery, resourceLimiter)
+			}),
+		})
+	}
+
+	return newMultiRegionCloudProvider(providers)
 }
