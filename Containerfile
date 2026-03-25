@@ -16,9 +16,10 @@ COPY . .
 # Build the Go app
 RUN CGO_ENABLED=0 GOOS=linux go build -a -o cluster-autoscaler-provider ./cmd/cluster-autoscaler-provider
 
-# Final stage
+# Use core for certs
 FROM ghcr.io/tkhq/base/core:sha-fcb913a3883e4bc1e18226a6861238d6e19005ba@sha256:c6a5dd420f059bebd47205870516478aba4e918225ba9f9971310f2f9502982b AS core
 
+# Final image
 FROM scratch
 COPY --from=core /etc/ssl /etc/ssl
 
