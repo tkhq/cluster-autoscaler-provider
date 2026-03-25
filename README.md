@@ -1,4 +1,4 @@
-# region-cluster-autoscaler
+# cluster-autoscaler-provider
 
 Bootstrap for an out-of-tree AWS cluster-autoscaler cloudprovider service using the upstream external-gRPC wrapper.
 
@@ -6,7 +6,7 @@ Bootstrap for an out-of-tree AWS cluster-autoscaler cloudprovider service using 
 
 This repository currently does one thing:
 
-- exposes the upstream AWS cluster-autoscaler cloudprovider through an external-gRPC service binary in `cmd/region-cluster-autoscaler`.
+- exposes the upstream AWS cluster-autoscaler cloudprovider through an external-gRPC service binary in `cmd/cluster-autoscaler-provider`.
 
 The initial goal is only to produce a buildable service binary that matches the example deployment model while keeping local divergence from upstream minimal. Multi-region ASG awareness and non-EKS behavior changes come next.
 
@@ -24,7 +24,7 @@ From the repository root:
 
 ```bash
 nix develop
-go build ./cmd/region-cluster-autoscaler
+go build ./cmd/cluster-autoscaler-provider
 ```
 
 This module depends on the upstream `k8s.io/autoscaler/cluster-autoscaler` module and documents the pinned autoscaler tag in `go.mod`.
