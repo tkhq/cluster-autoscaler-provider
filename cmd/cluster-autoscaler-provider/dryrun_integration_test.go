@@ -1,6 +1,6 @@
 //go:build integration
 
-// Integration tests for the dry-run mode of region-cluster-autoscaler.
+// Integration tests for the dry-run mode of cluster-autoscaler-provider.
 //
 // These tests verify that the dry-run gRPC wrapper correctly intercepts
 // mutating CloudProvider RPCs (NodeGroupIncreaseSize, NodeGroupDeleteNodes,
@@ -37,7 +37,7 @@
 //       go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 //       export KUBEBUILDER_ASSETS="$(setup-envtest use 1.35.0 -p path)"
 //   - The cluster-autoscaler binary is cached at
-//     ~/.cache/region-cluster-autoscaler/bin/ after first download.
+//     ~/.cache/cluster-autoscaler-provider/bin/ after first download.
 //
 // Environment variables:
 //   RUN_CA_EXTERNALGRPC_INTEGRATION_TEST=1   Required to run these tests.
@@ -50,7 +50,7 @@
 // Example:
 //   export KUBEBUILDER_ASSETS="$(setup-envtest use 1.35.0 -p path)"
 //   RUN_CA_EXTERNALGRPC_INTEGRATION_TEST=1 \
-//     go test -tags integration -v -timeout 5m ./cmd/region-cluster-autoscaler/
+//     go test -tags integration -v -timeout 5m ./cmd/cluster-autoscaler-provider/
 
 package main
 
@@ -836,7 +836,7 @@ func resolveClusterAutoscalerBinary(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("determine user cache dir: %v", err)
 	}
-	binDir := filepath.Join(cacheDir, "region-cluster-autoscaler", "bin")
+	binDir := filepath.Join(cacheDir, "cluster-autoscaler-provider", "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatalf("create binary cache dir: %v", err)
 	}

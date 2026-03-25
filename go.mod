@@ -1,4 +1,4 @@
-module github.com/tkhq/region-cluster-autoscaler
+module github.com/tkhq/cluster-autoscaler-provider
 
 go 1.25.0
 

@@ -3,7 +3,7 @@ GOWORK_MODE ?= off
 GOCACHE ?= $(CURDIR)/.cache/go-build
 GOMODCACHE ?= $(CURDIR)/.cache/go-mod
 
-SERVICE := region-cluster-autoscaler
+SERVICE := cluster-autoscaler-provider
 PACKAGE := ./cmd/$(SERVICE)
 OUTPUT := ./bin/$(SERVICE)
 
@@ -31,7 +31,7 @@ ca-test-integration: check-integration-reqs
 	mkdir -p $(GOCACHE) $(GOMODCACHE)
 	KUBEBUILDER_ASSETS="$$(setup-envtest use $(ENVTEST_K8S_VERSION) -p path)" \
 	RUN_CA_EXTERNALGRPC_INTEGRATION_TEST=1 \
-	$(GO_RUN) test -tags integration -v -timeout 5m ./cmd/region-cluster-autoscaler/
+	$(GO_RUN) test -tags integration -v -timeout 5m ./cmd/cluster-autoscaler-provider/
 
 .PHONY: tidy
 tidy:
