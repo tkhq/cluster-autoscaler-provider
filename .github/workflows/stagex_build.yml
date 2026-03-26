@@ -1,0 +1,77 @@
+name: stagex-build
+
+concurrency:
+  cancel-in-progress: true
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+
+on:
+  push:
+    tags:
+      - "*.*.*"
+      - "v*.*.*"
+    branches:
+      - main
+    paths:
+      - ".github/workflows/**"
+      - ".github/actions/**"
+      - "cmd/**"
+      - "Containerfile"
+      - "Makefile"
+      - "go.mod"
+      - "go.sum"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - ".github/actions/**"
+      - "cmd/**"
+      - "Containerfile"
+      - "Makefile"
+      - "go.mod"
+      - "go.sum"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_NAME: cluster-autoscaler-provider
+      IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/cluster-autoscaler-provider
+      TAGS: >-
+        ${{ github.ref == format('refs/heads/{0}', 'main') && 'latest' || '' }}
+        ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || '' }}
+        ${{ github.event_name != 'pull_request' && github.ref_name || '' }}
+      RELEASE: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v5
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build ${{ env.IMAGE_NAME }}
+        uses: ./.github/actions/build-oci-package
+        with:
+          name: ${{ env.IMAGE_NAME }}
+          version: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+          disable-artifact: true
+
+      - name: Load artifact to Docker
+        run: |
+          env -C out/${{ env.IMAGE_NAME }} tar -cf - . | docker load
+
+      - name: Upload to GHCR
+        if: ${{ env.TAGS != '' }}
+        run: |
+          for tag in ${TAGS}; do
+            docker tag "tkhq/${IMAGE_NAME}:latest" "${IMAGE_REPO}:${tag}"
+          done
+          docker image push --all-tags "${IMAGE_REPO}"

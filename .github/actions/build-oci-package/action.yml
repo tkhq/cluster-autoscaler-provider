@@ -1,0 +1,37 @@
+name: "Build an OCI package"
+description: "Build an OCI package"
+inputs:
+  name:
+    description: name of the package to be built
+    required: true
+  version:
+    description: version to be asserted to the build
+    required: true
+    default: "dev"
+  disable-artifact:
+    description: disable uploading the artifact after build
+    type: boolean
+    required: false
+    default: false
+
+# NB: I tried wrapping these as artifacts, but the artifact system is so incredibly slow (even v4, which is supposed to offer a 90% improvement) that it is not even remotely worth it.
+# Both upload and download are slow; they each take more than an order of magnitude more time than cache operations.
+runs:
+  using: "composite"
+  steps:
+    - name: Build ${{ inputs.name }} OCI image
+      shell: bash
+      run: |
+        echo "Setting timestamps of everything in out to now, to trick make into accepting cached dependencies..."
+        if [ -d out ]; then find out/ -exec touch {} +; fi
+        echo "Building ${{ inputs.name }}..."
+        make VERSION=${{ inputs.version }} OCI_IMAGE_NAME=${{ inputs.name }} -j"$(nproc)" oci
+
+    - name: artifact
+      if: ${{ inputs.disable-artifact == 'false' }}
+      id: artifact
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: ${{ inputs.name }}
+        path: out/${{ inputs.name }}
+        compression-level: 0
