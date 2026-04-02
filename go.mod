@@ -12,7 +12,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/eks v1.76.1 // indirect
 	github.com/aws/smithy-go v1.24.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	google.golang.org/grpc v1.78.0
+	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/gcfg.v1 v1.2.3 // indirect
 	k8s.io/api v0.35.0
@@ -28,7 +28,7 @@ require (
 require sigs.k8s.io/controller-runtime v0.22.4
 
 require (
-	cel.dev/expr v0.24.0 // indirect
+	cel.dev/expr v0.25.1 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
