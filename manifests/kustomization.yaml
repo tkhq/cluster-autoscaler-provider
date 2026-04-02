@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: cluster-autoscaler
+resources:
+  - 10-external-grpc.yaml
+images:
+  - name: cluster-autoscaler-provider
+    newName: ghcr.io/tkhq/cluster-autoscaler-provider@sha256
+    newTag: 843c505ab889ae068766a3b0755a5cc2719483e083067648785b6ee8ce2464ef

@@ -56,6 +56,15 @@ jobs:
           path: coverage.out
         if: always()
 
+  kustomize:
+    name: Kustomize
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: imranismail/setup-kustomize@v2
+      - name: Build manifests
+        run: kustomize build manifests >/dev/null
+
   vulncheck:
     name: Vulnerability Check
     runs-on: ubuntu-latest
