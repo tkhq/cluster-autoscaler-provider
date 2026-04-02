@@ -6,6 +6,7 @@ VERSION ?= dev
 OCI_IMAGE_NAME ?= cluster-autoscaler-provider
 OCI_REGISTRY ?= tkhq
 OCI_PLATFORM ?= linux/amd64
+DOCKER_BUILD ?= docker buildx build
 
 SERVICE := cluster-autoscaler-provider
 PACKAGE := ./cmd/$(SERVICE)
@@ -27,7 +28,7 @@ $(OCI_OUTPUT): $(DOCKER_SOURCES)
 	mkdir -p out
 	DOCKER_BUILDKIT=1 \
 	SOURCE_DATE_EPOCH=1 \
-	docker build \
+	$(DOCKER_BUILD) \
 		--build-arg VERSION=$(VERSION) \
 		--tag $(OCI_REGISTRY)/$(OCI_IMAGE_NAME) \
 		--progress=plain \
