@@ -2,17 +2,40 @@ GO ?= go
 GOWORK_MODE ?= off
 GOCACHE ?= $(CURDIR)/.cache/go-build
 GOMODCACHE ?= $(CURDIR)/.cache/go-mod
+VERSION ?= dev
+OCI_IMAGE_NAME ?= cluster-autoscaler-provider
+OCI_REGISTRY ?= tkhq
+OCI_PLATFORM ?= linux/amd64
 
 SERVICE := cluster-autoscaler-provider
 PACKAGE := ./cmd/$(SERVICE)
 OUTPUT := ./bin/$(SERVICE)
+OCI_OUTPUT := out/$(OCI_IMAGE_NAME)/index.json
 
 GO_RUN = GOWORK=$(GOWORK_MODE) GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) $(GO)
+DOCKER_SOURCES := $(shell git ls-files --cached --others --exclude-standard -- ':!:out/**' ':!:bin/**' ':!:cluster-autoscaler-provider' ':!:.cache/**')
 
 .PHONY: build
 build:
 	mkdir -p ./bin $(GOCACHE) $(GOMODCACHE)
 	$(GO_RUN) build -o $(OUTPUT) $(PACKAGE)
+
+.PHONY: oci
+oci: $(OCI_OUTPUT)
+
+$(OCI_OUTPUT): $(DOCKER_SOURCES)
+	mkdir -p out
+	DOCKER_BUILDKIT=1 \
+	SOURCE_DATE_EPOCH=1 \
+	docker build \
+		--build-arg VERSION=$(VERSION) \
+		--tag $(OCI_REGISTRY)/$(OCI_IMAGE_NAME) \
+		--progress=plain \
+		--platform=$(OCI_PLATFORM) \
+		--label "org.opencontainers.image.source=https://github.com/tkhq/cluster-autoscaler-provider" \
+		--output "type=oci,tar=false,rewrite-timestamp=true,force-compression=true,name=$(OCI_IMAGE_NAME),dest=out/$(OCI_IMAGE_NAME)" \
+		-f Containerfile \
+		.
 
 .PHONY: test
 test:
