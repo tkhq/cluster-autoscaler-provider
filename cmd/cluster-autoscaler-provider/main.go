@@ -147,7 +147,7 @@ func runRouter(ctx context.Context, runtimeConfig *RuntimeConfig) {
 		klog.Fatalf("failed to create caching router: %v", err)
 	}
 	defer func() {
-		if err := router.Close(); err != nil {
+		if err := router.Close(ctx); err != nil {
 			klog.Errorf("failed to close router backend connections: %v", err)
 		}
 	}()
@@ -235,7 +235,7 @@ func buildAWSCloudProvider(settings ProviderRuntimeSettings) cloudprovider.Cloud
 
 	resourceLimiter := cloudprovider.NewResourceLimiter(nil, nil)
 
-	return buildProviderForRegion(settings.Region, func() cloudprovider.CloudProvider {
+	return newCleanupOnceProvider(buildProviderForRegion(settings.Region, func() cloudprovider.CloudProvider {
 		return upstreamaws.BuildAWS(opts, discovery, resourceLimiter)
-	})
+	}))
 }

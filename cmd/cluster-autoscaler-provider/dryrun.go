@@ -14,6 +14,7 @@ type dryRunWrapper struct {
 	inner protos.CloudProviderServer
 }
 
+var _ protos.CloudProviderServer = (*dryRunWrapper)(nil)
 func newDryRunWrapper(inner protos.CloudProviderServer) *dryRunWrapper {
 	return &dryRunWrapper{inner: inner}
 }

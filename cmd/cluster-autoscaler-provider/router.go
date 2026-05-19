@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -74,8 +75,11 @@ type CachingRouter struct {
 	cacheTTL          time.Duration
 	backendRPCTimeout time.Duration
 	providerState     map[string]providerStatus
+	closeOnce         sync.Once
+	closeErr          error
 }
 
+var _ protos.CloudProviderServer = (*CachingRouter)(nil)
 type cacheEntry struct {
 	data       interface{}
 	expiration time.Time
@@ -145,17 +149,22 @@ func (r *CachingRouter) Start(ctx context.Context) {
 	}()
 }
 
-func (r *CachingRouter) Close() error {
-	var errs []string
-	for _, client := range r.clients {
-		if err := client.conn.Close(); err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", client.region, err))
+func (r *CachingRouter) Close(ctx context.Context) error {
+	r.closeOnce.Do(func() {
+		var errs []error
+		if err := r.cleanupProviders(ctx); err != nil {
+			errs = append(errs, err)
 		}
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("failed to close backend connections: %s", strings.Join(errs, "; "))
-	}
-	return nil
+		for _, client := range r.clients {
+			if err := client.conn.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close backend connection for region %s: %w", client.region, err))
+			}
+		}
+		if len(errs) > 0 {
+			r.closeErr = fmt.Errorf("failed to close backend connections: %w", errors.Join(errs...))
+		}
+	})
+	return r.closeErr
 }
 
 func (r *CachingRouter) HealthyProviderCount() int {
@@ -545,6 +554,11 @@ func (r *CachingRouter) Refresh(ctx context.Context, req *protos.RefreshRequest)
 }
 
 func (r *CachingRouter) Cleanup(ctx context.Context, req *protos.CleanupRequest) (*protos.CleanupResponse, error) {
+	klog.Infof("ignoring cleanup request from upstream client; provider cleanup is handled on router shutdown")
+	return &protos.CleanupResponse{}, nil
+}
+
+func (r *CachingRouter) cleanupProviders(ctx context.Context) error {
 	type result struct {
 		region string
 		err    error
@@ -561,7 +575,7 @@ func (r *CachingRouter) Cleanup(ctx context.Context, req *protos.CleanupRequest)
 			defer cancel()
 
 			klog.Infof("cleanup sent to provider=%s region=%s", rc.provider, rc.region)
-			_, err := rc.client.Cleanup(callCtx, req)
+			_, err := rc.client.Cleanup(callCtx, &protos.CleanupRequest{})
 			results <- result{region: rc.region, err: err}
 		}(client)
 	}
@@ -581,9 +595,9 @@ func (r *CachingRouter) Cleanup(ctx context.Context, req *protos.CleanupRequest)
 	}
 
 	if successes == 0 {
-		return nil, fmt.Errorf("failed to clean up all configured providers")
+		return fmt.Errorf("failed to clean up all configured providers")
 	}
-	return &protos.CleanupResponse{}, nil
+	return nil
 }
 
 func (r *CachingRouter) NodeGroupTargetSize(ctx context.Context, req *protos.NodeGroupTargetSizeRequest) (*protos.NodeGroupTargetSizeResponse, error) {

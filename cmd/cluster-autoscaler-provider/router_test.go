@@ -29,6 +29,8 @@ type routerTestBackend struct {
 	nodeGroupForNodeCalls int
 	refreshErr            error
 	refreshCalls          int
+	cleanupErr            error
+	cleanupCalls          int
 	lastIncreaseID        string
 	lastIncreaseDelta     int32
 	increaseCalls         int
@@ -40,6 +42,7 @@ type routerTestBackend struct {
 	gpuLabelCalls         int
 }
 
+var _ protos.CloudProviderServer = (*routerTestBackend)(nil)
 func (b *routerTestBackend) NodeGroups(ctx context.Context, _ *protos.NodeGroupsRequest) (*protos.NodeGroupsResponse, error) {
 	b.mu.Lock()
 	b.nodeGroupsCalls++
@@ -86,6 +89,12 @@ func (b *routerTestBackend) Refresh(_ context.Context, _ *protos.RefreshRequest)
 }
 
 func (b *routerTestBackend) Cleanup(_ context.Context, _ *protos.CleanupRequest) (*protos.CleanupResponse, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.cleanupCalls++
+	if b.cleanupErr != nil {
+		return nil, b.cleanupErr
+	}
 	return &protos.CleanupResponse{}, nil
 }
 
@@ -197,7 +206,7 @@ func newTestRouter(t *testing.T, backends map[string]int) *CachingRouter {
 		t.Fatalf("new router: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := router.Close(); err != nil {
+		if err := router.Close(context.Background()); err != nil {
 			t.Fatalf("close router: %v", err)
 		}
 	})
@@ -430,6 +439,50 @@ func TestRouterRefreshFailsWhenNoProvidersRefreshSuccessfully(t *testing.T) {
 
 	if _, err := router.Refresh(context.Background(), &protos.RefreshRequest{}); err == nil {
 		t.Fatal("expected refresh to fail when all providers fail")
+	}
+}
+
+func TestRouterCleanupDoesNotForwardToProviders(t *testing.T) {
+	east := &routerTestBackend{}
+
+	router := newTestRouter(t, map[string]int{
+		"us-east-1": startRouterTestBackend(t, east),
+	})
+
+	if _, err := router.Cleanup(context.Background(), &protos.CleanupRequest{}); err != nil {
+		t.Fatalf("Cleanup failed: %v", err)
+	}
+
+	east.mu.Lock()
+	defer east.mu.Unlock()
+	if east.cleanupCalls != 0 {
+		t.Fatalf("expected provider cleanup calls = 0, got %d", east.cleanupCalls)
+	}
+}
+
+func TestRouterCloseCleansUpProviders(t *testing.T) {
+	east := &routerTestBackend{}
+	west := &routerTestBackend{}
+
+	router := newTestRouter(t, map[string]int{
+		"us-east-1": startRouterTestBackend(t, east),
+		"us-west-2": startRouterTestBackend(t, west),
+	})
+
+	if err := router.Close(context.Background()); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	east.mu.Lock()
+	defer east.mu.Unlock()
+	if east.cleanupCalls != 1 {
+		t.Fatalf("expected east provider cleanup calls = 1, got %d", east.cleanupCalls)
+	}
+
+	west.mu.Lock()
+	defer west.mu.Unlock()
+	if west.cleanupCalls != 1 {
+		t.Fatalf("expected west provider cleanup calls = 1, got %d", west.cleanupCalls)
 	}
 }
 
