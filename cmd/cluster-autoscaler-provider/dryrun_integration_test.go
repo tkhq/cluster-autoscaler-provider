@@ -108,6 +108,8 @@ type stubCloudProvider struct {
 	decreaseTargetCalls int
 }
 
+var _ protos.CloudProviderServer = (*stubCloudProvider)(nil)
+var _ protos.CloudProviderServer = (*twoNodeStubCloudProvider)(nil)
 func (s *stubCloudProvider) NodeGroups(_ context.Context, _ *protos.NodeGroupsRequest) (*protos.NodeGroupsResponse, error) {
 	return &protos.NodeGroupsResponse{
 		NodeGroups: []*protos.NodeGroup{
