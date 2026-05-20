@@ -20,10 +20,9 @@ jobs:
     name: Kustomize
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: imranismail/setup-kustomize@v2
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: imranismail/setup-kustomize@53f941b41dca13ed61874bbc6b4b6e1562877530 # v3.0.0
       - name: Build manifests
         run: |
           kustomize build manifests/base >/dev/null
           kustomize build manifests/overlays/dev >/dev/null
-
