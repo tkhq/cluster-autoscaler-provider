@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.1](https://github.com/tkhq/cluster-autoscaler-provider/compare/v1.0.0...v1.0.1) (2026-05-20)
+
+
+### Bug Fixes
+
+* publish release images from release-please workflow ([2eeaff3](https://github.com/tkhq/cluster-autoscaler-provider/commit/2eeaff32b8d4a48732485bb2556f5cc9399fff52))
+* publish release images from release-please workflow ([8944c69](https://github.com/tkhq/cluster-autoscaler-provider/commit/8944c696aefd8608dcf5950930604eb59452a0c3))
+
 ## 1.0.0 (2026-05-20)
 
 
