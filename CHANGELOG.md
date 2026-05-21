@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.2](https://github.com/tkhq/cluster-autoscaler-provider/compare/v1.0.1...v1.0.2) (2026-05-21)
+
+
+### Bug Fixes
+
+* ignore unmanaged nodes (from other regions) ([8b511dc](https://github.com/tkhq/cluster-autoscaler-provider/commit/8b511dc2258ff5e197914254839a4325a8117328))
+* ignore unmanaged nodes (from other regions) ([b881f36](https://github.com/tkhq/cluster-autoscaler-provider/commit/b881f36af9c3ae8913643c5e1f92e7bae17199f1))
+
 ## [1.0.1](https://github.com/tkhq/cluster-autoscaler-provider/compare/v1.0.0...v1.0.1) (2026-05-20)
 
 
