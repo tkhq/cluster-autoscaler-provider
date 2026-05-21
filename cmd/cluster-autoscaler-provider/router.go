@@ -413,7 +413,8 @@ func (r *CachingRouter) NodeGroupForNode(ctx context.Context, req *protos.NodeGr
 
 	client, err := r.getClientForNode(req.GetNode().GetProviderID())
 	if err != nil {
-		return nil, err
+		klog.V(4).Infof("node group lookup skipped for unroutable node=%s providerID=%s: %v", req.GetNode().GetName(), req.GetNode().GetProviderID(), err)
+		return &protos.NodeGroupForNodeResponse{}, nil
 	}
 
 	callCtx, cancel := r.backendContext(ctx, client)
