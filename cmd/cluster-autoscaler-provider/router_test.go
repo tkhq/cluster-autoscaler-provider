@@ -292,6 +292,33 @@ func TestRouterNodeGroupsTimesOutSlowBackend(t *testing.T) {
 	}
 }
 
+func TestRouterNodeGroupForNodeReturnsEmptyForUnmanagedRegion(t *testing.T) {
+
+	east := &routerTestBackend{}
+	router := newTestRouter(t, map[string]int{
+		"us-east-1": startRouterTestBackend(t, east),
+	})
+
+	resp, err := router.NodeGroupForNode(context.Background(), &protos.NodeGroupForNodeRequest{
+		Node: &protos.ExternalGrpcNode{
+			Name:       "node-ap-southeast-1",
+			ProviderID: "aws:///ap-southeast-1a/i-1234567890",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NodeGroupForNode failed: %v", err)
+	}
+	if resp.GetNodeGroup() != nil {
+		t.Fatalf("expected no node group for unmanaged region, got %#v", resp.GetNodeGroup())
+	}
+
+	east.mu.Lock()
+	defer east.mu.Unlock()
+	if east.nodeGroupForNodeCalls != 0 {
+		t.Fatalf("expected no backend lookup for unmanaged region, got %d calls", east.nodeGroupForNodeCalls)
+	}
+}
+
 func TestRouterNodeGroupsCachesAndRefreshInvalidates(t *testing.T) {
 	east := &routerTestBackend{
 		nodeGroups: []*protos.NodeGroup{{Id: "asg-east", MinSize: 1, MaxSize: 3}},
@@ -411,14 +438,17 @@ func TestRouterNodeGroupForNodeRejectsInvalidProviderIDWithoutFallback(t *testin
 		"us-east-1": startRouterTestBackend(t, east),
 	})
 
-	_, err := router.NodeGroupForNode(context.Background(), &protos.NodeGroupForNodeRequest{
+	resp, err := router.NodeGroupForNode(context.Background(), &protos.NodeGroupForNodeRequest{
 		Node: &protos.ExternalGrpcNode{
 			Name:       "node-1",
 			ProviderID: "not-an-aws-provider-id",
 		},
 	})
-	if err == nil {
-		t.Fatal("expected invalid provider ID to fail")
+	if err != nil {
+		t.Fatalf("expected invalid provider ID to be ignored, got error: %v", err)
+	}
+	if resp.GetNodeGroup() != nil {
+		t.Fatalf("expected no node group for invalid provider ID, got %#v", resp.GetNodeGroup())
 	}
 
 	east.mu.Lock()
