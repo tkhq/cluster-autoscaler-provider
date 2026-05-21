@@ -17,9 +17,7 @@ import (
 	klog "k8s.io/klog/v2"
 )
 
-const (
-	defaultProviderProbeInterval = 5 * time.Second
-)
+const defaultProviderProbeInterval = 5 * time.Second
 
 var (
 	registerRouterMetricsOnce sync.Once
@@ -143,6 +141,9 @@ func (r *CachingRouter) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if r.HealthyProviderCount() > 0 {
+					continue
+				}
 				r.probeProviders(ctx)
 			}
 		}
