@@ -84,3 +84,65 @@ Notes:
 - Any of those YAML fields can be overridden in a specific region entry when a region must diverge.
 - Provider runtime settings come from the shared config file. Provider startup only supplies the region selector used to choose an entry from `providers`.
 - AWS-provider-specific settings that are not shared runtime topology should stay outside this file unless they are truly common across provider instances.
+
+### Runtime config options
+
+Top-level fields:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `router` | no | Router process settings. Omitted fields use flag/env defaults. |
+| `providerDefaults` | no | Default AWS provider settings applied to every region unless the region overrides them. |
+| `providers` | yes | Region-keyed provider map. Each key must be a non-empty AWS region, and at least one provider is required. |
+
+`router` fields:
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `grpcAddress` | no | `:8086` | Address the router listens on for Cluster Autoscaler external-gRPC calls. |
+| `httpAddress` | no | `:8080` | Address the router listens on for `/healthz`, `/ready`, and `/metrics`. |
+| `cacheTTL` | no | `15s` | How long the router caches successful `NodeGroups` responses. Must be greater than zero when set. |
+| `backendRPCTimeout` | no | `5s` | Default timeout for router-to-provider RPCs. Must be greater than zero when set. |
+
+`providerDefaults` fields:
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `clusterName` | no | empty | Cluster name passed to the upstream AWS cloud provider. |
+| `nodeGroupAutoDiscovery` | no | empty | List of AWS node group auto-discovery specs, for example `asg:tag=k8s.io/cluster-autoscaler/dev`. Empty entries are rejected. |
+| `skipNodesWithLocalStorage` | no | `false` | Passed through to the upstream AWS provider to control scale-down behavior for nodes with local storage. |
+| `skipNodesWithSystemPods` | no | `false` | Passed through to the upstream AWS provider to control scale-down behavior for nodes running system pods. |
+
+`providers.<region>` fields:
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `port` | yes | none | Local gRPC port for the regional provider process. Must be unique across providers and between `1` and `65535`. The router connects to `127.0.0.1:<port>`. |
+| `rpcTimeout` | no | `router.backendRPCTimeout` | Per-region router-to-provider RPC timeout. Must be greater than zero when set. |
+| `clusterName` | no | `providerDefaults.clusterName` | Per-region override for `clusterName`. |
+| `nodeGroupAutoDiscovery` | no | `providerDefaults.nodeGroupAutoDiscovery` | Per-region replacement list for auto-discovery specs. This replaces the default list; it does not append to it. |
+| `skipNodesWithLocalStorage` | no | `providerDefaults.skipNodesWithLocalStorage` | Per-region override for local-storage scale-down behavior. |
+| `skipNodesWithSystemPods` | no | `providerDefaults.skipNodesWithSystemPods` | Per-region override for system-pod scale-down behavior. |
+
+Durations use Go duration strings such as `5s`, `30s`, or `2m`.
+
+## Cluster Autoscaler external-gRPC config
+
+Cluster Autoscaler also has its own `--cloud-config` file for the `externalgrpc` cloud provider. That file is separate from this repository's runtime config.
+
+Example:
+
+```yaml
+address: cluster-autoscaler-provider:8086
+grpc_timeout: 30s
+```
+
+Supported external-gRPC cloud config fields:
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `address` | yes | none | Router gRPC address that Cluster Autoscaler calls. |
+| `grpc_timeout` | no | `5s` | Timeout Cluster Autoscaler applies to each external-gRPC cloud provider call. Increase this above the router/provider timeout budget when remote regions can take longer than five seconds. |
+| `cert` | no | empty | Client TLS certificate path used by Cluster Autoscaler when connecting to the router. If omitted, CA uses insecure gRPC. |
+| `key` | no | empty | Client TLS private key path. Required when `cert` is set. |
+| `cacert` | no | empty | CA certificate path used to verify the router server certificate. Required when `cert` is set. |
