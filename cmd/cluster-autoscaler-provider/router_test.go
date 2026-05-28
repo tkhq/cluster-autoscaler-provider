@@ -164,6 +164,27 @@ func startRouterTestBackend(t *testing.T, backend protos.CloudProviderServer) in
 	return listener.Addr().(*net.TCPAddr).Port
 }
 
+func startRouterTestBackendOnPort(t *testing.T, port int, backend protos.CloudProviderServer) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("listen on fixed port %d: %v", port, err)
+	}
+
+	server := grpc.NewServer()
+	protos.RegisterCloudProviderServer(server, backend)
+	go func() {
+		if err := server.Serve(listener); err != nil {
+			t.Logf("backend server exited: %v", err)
+		}
+	}()
+
+	t.Cleanup(func() {
+		server.GracefulStop()
+	})
+}
+
 func reserveUnusedPort(t *testing.T) int {
 	t.Helper()
 
@@ -259,6 +280,47 @@ func TestRouterReadinessAndMetricsReflectProviderHealth(t *testing.T) {
 			t.Fatalf("metrics output missing %q\n%s", want, body)
 		}
 	}
+}
+
+func TestRouterStartReprobesUntilProviderBecomesHealthy(t *testing.T) {
+	t.Parallel()
+
+	port := reserveUnusedPort(t)
+	router := newTestRouter(t, map[string]int{
+		"us-east-1": port,
+	})
+	defer func() {
+		if err := router.Close(context.Background()); err != nil {
+			t.Fatalf("Close failed: %v", err)
+		}
+	}()
+
+	server := newRouterHTTPServer("127.0.0.1:0", router)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	router.Start(ctx)
+
+	notReady := doRequest(t, server.Handler, "/ready")
+	if notReady.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected not ready before backend starts, got %d", notReady.Code)
+	}
+
+	backend := &routerTestBackend{
+		nodeGroups: []*protos.NodeGroup{{Id: "asg-east", MinSize: 1, MaxSize: 3}},
+	}
+	startRouterTestBackendOnPort(t, port, backend)
+
+	deadline := time.Now().Add(defaultProviderProbeInterval + 2*time.Second)
+	for time.Now().Before(deadline) {
+		ready := doRequest(t, server.Handler, "/ready")
+		if ready.Code == http.StatusOK {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Fatal("expected router to become ready after backend started")
 }
 
 func TestRouterNodeGroupsTimesOutSlowBackend(t *testing.T) {
