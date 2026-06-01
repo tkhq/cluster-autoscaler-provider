@@ -2,5 +2,5 @@
 /.cache/
 /bin/
 PROMPT.md
-cluster-autoscaler-provider
+./cluster-autoscaler-provider
 node_modules/
