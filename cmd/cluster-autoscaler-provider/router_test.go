@@ -43,6 +43,7 @@ type routerTestBackend struct {
 }
 
 var _ protos.CloudProviderServer = (*routerTestBackend)(nil)
+
 func (b *routerTestBackend) NodeGroups(ctx context.Context, _ *protos.NodeGroupsRequest) (*protos.NodeGroupsResponse, error) {
 	b.mu.Lock()
 	b.nodeGroupsCalls++
@@ -289,6 +290,60 @@ func TestRouterNodeGroupsTimesOutSlowBackend(t *testing.T) {
 	}
 	if resp.GetNodeGroups()[0].GetId() != "us-east-1/asg-east" {
 		t.Fatalf("expected east result after west timeout, got %q", resp.GetNodeGroups()[0].GetId())
+	}
+}
+
+func TestBackendRPCOutcomeClassifiesCancellationSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		parentErr  error
+		backendErr error
+		want       string
+	}{
+		{
+			name: "success",
+			want: "success",
+		},
+		{
+			name:       "caller deadline",
+			err:        context.DeadlineExceeded,
+			parentErr:  context.DeadlineExceeded,
+			backendErr: context.DeadlineExceeded,
+			want:       "caller_deadline",
+		},
+		{
+			name:       "caller canceled",
+			err:        context.Canceled,
+			parentErr:  context.Canceled,
+			backendErr: context.Canceled,
+			want:       "caller_canceled",
+		},
+		{
+			name:       "backend deadline",
+			err:        context.DeadlineExceeded,
+			backendErr: context.DeadlineExceeded,
+			want:       "backend_deadline",
+		},
+		{
+			name:       "backend canceled",
+			err:        context.Canceled,
+			backendErr: context.Canceled,
+			want:       "backend_canceled",
+		},
+		{
+			name: "other error",
+			err:  fmt.Errorf("backend unavailable"),
+			want: "error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := backendRPCOutcome(tt.err, tt.parentErr, tt.backendErr); got != tt.want {
+				t.Fatalf("expected %q, got %q", tt.want, got)
+			}
+		})
 	}
 }
 

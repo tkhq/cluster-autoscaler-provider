@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/externalgrpc/protos"
 	k8smetrics "k8s.io/component-base/metrics"
@@ -48,6 +50,25 @@ var (
 			Help:      "Number of backend providers currently marked unhealthy.",
 		},
 	)
+	routerBackendRPCTotal = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Namespace: "cluster_autoscaler_provider",
+			Subsystem: "router",
+			Name:      "backend_rpc_total",
+			Help:      "Number of router RPCs sent to backend providers, labeled by result.",
+		},
+		[]string{"provider", "region", "method", "grpc_code", "outcome"},
+	)
+	routerBackendRPCDuration = k8smetrics.NewHistogramVec(
+		&k8smetrics.HistogramOpts{
+			Namespace: "cluster_autoscaler_provider",
+			Subsystem: "router",
+			Name:      "backend_rpc_duration_seconds",
+			Help:      "Duration of router RPCs sent to backend providers, labeled by result.",
+			Buckets:   []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30, 60},
+		},
+		[]string{"provider", "region", "method", "grpc_code", "outcome"},
+	)
 )
 
 type regionalClient struct {
@@ -62,6 +83,28 @@ type providerStatus struct {
 	healthy     bool
 	lastChecked time.Time
 	lastError   string
+}
+
+type backendRPC struct {
+	parent  context.Context
+	context context.Context
+	cancel  context.CancelFunc
+	client  regionalClient
+	method  string
+	timeout time.Duration
+	start   time.Time
+}
+
+type backendRPCStatus struct {
+	provider   string
+	region     string
+	method     string
+	duration   time.Duration
+	timeout    time.Duration
+	grpcCode   codes.Code
+	outcome    string
+	parentErr  error
+	backendErr error
 }
 
 type CachingRouter struct {
@@ -80,6 +123,7 @@ type CachingRouter struct {
 }
 
 var _ protos.CloudProviderServer = (*CachingRouter)(nil)
+
 type cacheEntry struct {
 	data       interface{}
 	expiration time.Time
@@ -91,6 +135,8 @@ func registerRouterMetrics() {
 			routerConfiguredProviders,
 			routerHealthyProviders,
 			routerUnhealthyProviders,
+			routerBackendRPCTotal,
+			routerBackendRPCDuration,
 		)
 	})
 }
@@ -204,10 +250,9 @@ func (r *CachingRouter) probeProviders(ctx context.Context) {
 		go func(rc regionalClient) {
 			defer wg.Done()
 
-			probeCtx, cancel := r.backendContext(ctx, rc)
-			defer cancel()
-
-			_, err := rc.client.NodeGroups(probeCtx, &protos.NodeGroupsRequest{})
+			call := r.startBackendRPC(ctx, rc, "ProbeNodeGroups")
+			_, err := rc.client.NodeGroups(call.Context(), &protos.NodeGroupsRequest{})
+			call.Finish(err)
 			results <- probeResult{region: rc.region, err: err}
 		}(client)
 	}
@@ -267,12 +312,93 @@ func (r *CachingRouter) getHealthyClients() []regionalClient {
 	return clients
 }
 
-func (r *CachingRouter) backendContext(parent context.Context, client regionalClient) (context.Context, context.CancelFunc) {
+func (r *CachingRouter) backendTimeout(client regionalClient) time.Duration {
 	timeout := r.backendRPCTimeout
 	if client.rpcTimeout > 0 {
 		timeout = client.rpcTimeout
 	}
-	return context.WithTimeout(parent, timeout)
+	return timeout
+}
+
+func (r *CachingRouter) startBackendRPC(parent context.Context, client regionalClient, method string) *backendRPC {
+	timeout := r.backendTimeout(client)
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	return &backendRPC{
+		parent:  parent,
+		context: ctx,
+		cancel:  cancel,
+		client:  client,
+		method:  method,
+		timeout: timeout,
+		start:   time.Now(),
+	}
+}
+
+func (c *backendRPC) Context() context.Context {
+	return c.context
+}
+
+func (c *backendRPC) Finish(err error) backendRPCStatus {
+	duration := time.Since(c.start)
+	grpcCode := status.Code(err)
+	outcome := backendRPCOutcome(err, c.parent.Err(), c.context.Err())
+
+	routerBackendRPCTotal.WithLabelValues(c.client.provider, c.client.region, c.method, grpcCode.String(), outcome).Inc()
+	routerBackendRPCDuration.WithLabelValues(c.client.provider, c.client.region, c.method, grpcCode.String(), outcome).Observe(duration.Seconds())
+
+	c.cancel()
+	return backendRPCStatus{
+		provider:   c.client.provider,
+		region:     c.client.region,
+		method:     c.method,
+		duration:   duration,
+		timeout:    c.timeout,
+		grpcCode:   grpcCode,
+		outcome:    outcome,
+		parentErr:  c.parent.Err(),
+		backendErr: c.context.Err(),
+	}
+}
+
+func backendRPCOutcome(err error, parentErr error, backendErr error) string {
+	if err == nil {
+		return "success"
+	}
+	if errors.Is(parentErr, context.DeadlineExceeded) {
+		return "caller_deadline"
+	}
+	if errors.Is(parentErr, context.Canceled) {
+		return "caller_canceled"
+	}
+	if errors.Is(backendErr, context.DeadlineExceeded) {
+		return "backend_deadline"
+	}
+	if errors.Is(backendErr, context.Canceled) {
+		return "backend_canceled"
+	}
+	return "error"
+}
+
+func (s backendRPCStatus) logValues() string {
+	return fmt.Sprintf(
+		"provider=%s region=%s method=%s duration=%s timeout=%s grpc_code=%s outcome=%s parent_err=%s backend_err=%s",
+		s.provider,
+		s.region,
+		s.method,
+		s.duration.Round(time.Millisecond),
+		s.timeout,
+		s.grpcCode.String(),
+		s.outcome,
+		contextErrString(s.parentErr),
+		contextErrString(s.backendErr),
+	)
+}
+
+func contextErrString(err error) string {
+	if err == nil {
+		return "none"
+	}
+	return err.Error()
 }
 
 func (r *CachingRouter) clearCache() {
@@ -355,6 +481,7 @@ func (r *CachingRouter) NodeGroups(ctx context.Context, req *protos.NodeGroupsRe
 		region string
 		resp   *protos.NodeGroupsResponse
 		err    error
+		status backendRPCStatus
 	}
 
 	results := make(chan result, len(r.clients))
@@ -364,11 +491,9 @@ func (r *CachingRouter) NodeGroups(ctx context.Context, req *protos.NodeGroupsRe
 		go func(rc regionalClient) {
 			defer wg.Done()
 
-			callCtx, cancel := r.backendContext(ctx, rc)
-			defer cancel()
-
-			resp, err := rc.client.NodeGroups(callCtx, req)
-			results <- result{region: rc.region, resp: resp, err: err}
+			call := r.startBackendRPC(ctx, rc, "NodeGroups")
+			resp, err := rc.client.NodeGroups(call.Context(), req)
+			results <- result{region: rc.region, resp: resp, err: err, status: call.Finish(err)}
 		}(client)
 	}
 
@@ -379,7 +504,7 @@ func (r *CachingRouter) NodeGroups(ctx context.Context, req *protos.NodeGroupsRe
 	successes := 0
 	for result := range results {
 		if result.err != nil {
-			klog.Errorf("failed to fetch node groups from %s: %v", result.region, result.err)
+			klog.Errorf("failed to fetch node groups from backend %s: %v", result.status.logValues(), result.err)
 			r.markProviderUnhealthy(result.region, result.err)
 			continue
 		}
@@ -417,13 +542,12 @@ func (r *CachingRouter) NodeGroupForNode(ctx context.Context, req *protos.NodeGr
 		return &protos.NodeGroupForNodeResponse{}, nil
 	}
 
-	callCtx, cancel := r.backendContext(ctx, client)
-	defer cancel()
-
 	klog.V(6).Infof("node group lookup sent to provider=%s region=%s node=%s providerID=%s", client.provider, client.region, req.GetNode().GetName(), req.GetNode().GetProviderID())
-	resp, err := client.client.NodeGroupForNode(callCtx, req)
+	call := r.startBackendRPC(ctx, client, "NodeGroupForNode")
+	resp, err := client.client.NodeGroupForNode(call.Context(), req)
+	callStatus := call.Finish(err)
 	if err != nil {
-		klog.Errorf("node group lookup failed for provider=%s region=%s node=%s providerID=%s: %v", client.provider, client.region, req.GetNode().GetName(), req.GetNode().GetProviderID(), err)
+		klog.Errorf("node group lookup failed for node=%s providerID=%s %s: %v", req.GetNode().GetName(), req.GetNode().GetProviderID(), callStatus.logValues(), err)
 		r.markProviderUnhealthy(client.region, err)
 		return nil, err
 	}
@@ -441,16 +565,15 @@ func (r *CachingRouter) NodeGroupIncreaseSize(ctx context.Context, req *protos.N
 		return nil, err
 	}
 
-	callCtx, cancel := r.backendContext(ctx, client)
-	defer cancel()
-
 	klog.Infof("scale up sent to provider=%s region=%s group=%s delta=%d", client.provider, client.region, backendID, req.GetDelta())
-	resp, err := client.client.NodeGroupIncreaseSize(callCtx, &protos.NodeGroupIncreaseSizeRequest{
+	call := r.startBackendRPC(ctx, client, "NodeGroupIncreaseSize")
+	resp, err := client.client.NodeGroupIncreaseSize(call.Context(), &protos.NodeGroupIncreaseSizeRequest{
 		Id:    backendID,
 		Delta: req.GetDelta(),
 	})
+	callStatus := call.Finish(err)
 	if err != nil {
-		klog.Errorf("scale up failed for provider=%s region=%s group=%s delta=%d: %v", client.provider, client.region, backendID, req.GetDelta(), err)
+		klog.Errorf("scale up failed for group=%s delta=%d %s: %v", backendID, req.GetDelta(), callStatus.logValues(), err)
 		r.markProviderUnhealthy(client.region, err)
 		return nil, err
 	}
@@ -466,16 +589,15 @@ func (r *CachingRouter) NodeGroupDeleteNodes(ctx context.Context, req *protos.No
 		return nil, err
 	}
 
-	callCtx, cancel := r.backendContext(ctx, client)
-	defer cancel()
-
 	klog.Infof("delete nodes sent to provider=%s region=%s group=%s nodes=%s", client.provider, client.region, backendID, formatProviderIDs(req.GetNodes()))
-	resp, err := client.client.NodeGroupDeleteNodes(callCtx, &protos.NodeGroupDeleteNodesRequest{
+	call := r.startBackendRPC(ctx, client, "NodeGroupDeleteNodes")
+	resp, err := client.client.NodeGroupDeleteNodes(call.Context(), &protos.NodeGroupDeleteNodesRequest{
 		Id:    backendID,
 		Nodes: req.GetNodes(),
 	})
+	callStatus := call.Finish(err)
 	if err != nil {
-		klog.Errorf("delete nodes failed for provider=%s region=%s group=%s nodes=%s: %v", client.provider, client.region, backendID, formatProviderIDs(req.GetNodes()), err)
+		klog.Errorf("delete nodes failed for group=%s nodes=%s %s: %v", backendID, formatProviderIDs(req.GetNodes()), callStatus.logValues(), err)
 		r.markProviderUnhealthy(client.region, err)
 		return nil, err
 	}
@@ -491,16 +613,15 @@ func (r *CachingRouter) NodeGroupDecreaseTargetSize(ctx context.Context, req *pr
 		return nil, err
 	}
 
-	callCtx, cancel := r.backendContext(ctx, client)
-	defer cancel()
-
 	klog.Infof("scale down sent to provider=%s region=%s group=%s delta=%d", client.provider, client.region, backendID, req.GetDelta())
-	resp, err := client.client.NodeGroupDecreaseTargetSize(callCtx, &protos.NodeGroupDecreaseTargetSizeRequest{
+	call := r.startBackendRPC(ctx, client, "NodeGroupDecreaseTargetSize")
+	resp, err := client.client.NodeGroupDecreaseTargetSize(call.Context(), &protos.NodeGroupDecreaseTargetSizeRequest{
 		Id:    backendID,
 		Delta: req.GetDelta(),
 	})
+	callStatus := call.Finish(err)
 	if err != nil {
-		klog.Errorf("scale down failed for provider=%s region=%s group=%s delta=%d: %v", client.provider, client.region, backendID, req.GetDelta(), err)
+		klog.Errorf("scale down failed for group=%s delta=%d %s: %v", backendID, req.GetDelta(), callStatus.logValues(), err)
 		r.markProviderUnhealthy(client.region, err)
 		return nil, err
 	}
@@ -516,6 +637,7 @@ func (r *CachingRouter) Refresh(ctx context.Context, req *protos.RefreshRequest)
 	type result struct {
 		region string
 		err    error
+		status backendRPCStatus
 	}
 
 	results := make(chan result, len(r.clients))
@@ -525,12 +647,10 @@ func (r *CachingRouter) Refresh(ctx context.Context, req *protos.RefreshRequest)
 		go func(rc regionalClient) {
 			defer wg.Done()
 
-			callCtx, cancel := r.backendContext(ctx, rc)
-			defer cancel()
-
 			klog.V(2).Infof("refresh sent to provider=%s region=%s", rc.provider, rc.region)
-			_, err := rc.client.Refresh(callCtx, req)
-			results <- result{region: rc.region, err: err}
+			call := r.startBackendRPC(ctx, rc, "Refresh")
+			_, err := rc.client.Refresh(call.Context(), req)
+			results <- result{region: rc.region, err: err, status: call.Finish(err)}
 		}(client)
 	}
 
@@ -540,7 +660,7 @@ func (r *CachingRouter) Refresh(ctx context.Context, req *protos.RefreshRequest)
 	successes := 0
 	for result := range results {
 		if result.err != nil {
-			klog.Errorf("failed to refresh backend %s: %v", result.region, result.err)
+			klog.Errorf("failed to refresh backend %s: %v", result.status.logValues(), result.err)
 			r.markProviderUnhealthy(result.region, result.err)
 			continue
 		}
@@ -563,6 +683,7 @@ func (r *CachingRouter) cleanupProviders(ctx context.Context) error {
 	type result struct {
 		region string
 		err    error
+		status backendRPCStatus
 	}
 
 	results := make(chan result, len(r.clients))
@@ -572,12 +693,10 @@ func (r *CachingRouter) cleanupProviders(ctx context.Context) error {
 		go func(rc regionalClient) {
 			defer wg.Done()
 
-			callCtx, cancel := r.backendContext(ctx, rc)
-			defer cancel()
-
 			klog.Infof("cleanup sent to provider=%s region=%s", rc.provider, rc.region)
-			_, err := rc.client.Cleanup(callCtx, &protos.CleanupRequest{})
-			results <- result{region: rc.region, err: err}
+			call := r.startBackendRPC(ctx, rc, "Cleanup")
+			_, err := rc.client.Cleanup(call.Context(), &protos.CleanupRequest{})
+			results <- result{region: rc.region, err: err, status: call.Finish(err)}
 		}(client)
 	}
 
@@ -587,7 +706,7 @@ func (r *CachingRouter) cleanupProviders(ctx context.Context) error {
 	successes := 0
 	for result := range results {
 		if result.err != nil {
-			klog.Errorf("failed to clean up backend %s: %v", result.region, result.err)
+			klog.Errorf("failed to clean up backend %s: %v", result.status.logValues(), result.err)
 			r.markProviderUnhealthy(result.region, result.err)
 			continue
 		}
@@ -607,10 +726,9 @@ func (r *CachingRouter) NodeGroupTargetSize(ctx context.Context, req *protos.Nod
 		return nil, err
 	}
 
-	callCtx, cancel := r.backendContext(ctx, client)
-	defer cancel()
-
-	resp, err := client.client.NodeGroupTargetSize(callCtx, &protos.NodeGroupTargetSizeRequest{Id: backendID})
+	call := r.startBackendRPC(ctx, client, "NodeGroupTargetSize")
+	resp, err := client.client.NodeGroupTargetSize(call.Context(), &protos.NodeGroupTargetSizeRequest{Id: backendID})
+	call.Finish(err)
 	if err != nil {
 		r.markProviderUnhealthy(client.region, err)
 		return nil, err
@@ -625,10 +743,9 @@ func (r *CachingRouter) NodeGroupNodes(ctx context.Context, req *protos.NodeGrou
 		return nil, err
 	}
 
-	callCtx, cancel := r.backendContext(ctx, client)
-	defer cancel()
-
-	resp, err := client.client.NodeGroupNodes(callCtx, &protos.NodeGroupNodesRequest{Id: backendID})
+	call := r.startBackendRPC(ctx, client, "NodeGroupNodes")
+	resp, err := client.client.NodeGroupNodes(call.Context(), &protos.NodeGroupNodesRequest{Id: backendID})
+	call.Finish(err)
 	if err != nil {
 		r.markProviderUnhealthy(client.region, err)
 		return nil, err
@@ -643,10 +760,9 @@ func (r *CachingRouter) NodeGroupTemplateNodeInfo(ctx context.Context, req *prot
 		return nil, err
 	}
 
-	callCtx, cancel := r.backendContext(ctx, client)
-	defer cancel()
-
-	resp, err := client.client.NodeGroupTemplateNodeInfo(callCtx, &protos.NodeGroupTemplateNodeInfoRequest{Id: backendID})
+	call := r.startBackendRPC(ctx, client, "NodeGroupTemplateNodeInfo")
+	resp, err := client.client.NodeGroupTemplateNodeInfo(call.Context(), &protos.NodeGroupTemplateNodeInfoRequest{Id: backendID})
+	call.Finish(err)
 	if err != nil {
 		r.markProviderUnhealthy(client.region, err)
 		return nil, err
@@ -661,13 +777,12 @@ func (r *CachingRouter) NodeGroupGetOptions(ctx context.Context, req *protos.Nod
 		return nil, err
 	}
 
-	callCtx, cancel := r.backendContext(ctx, client)
-	defer cancel()
-
-	resp, err := client.client.NodeGroupGetOptions(callCtx, &protos.NodeGroupAutoscalingOptionsRequest{
+	call := r.startBackendRPC(ctx, client, "NodeGroupGetOptions")
+	resp, err := client.client.NodeGroupGetOptions(call.Context(), &protos.NodeGroupAutoscalingOptionsRequest{
 		Id:       backendID,
 		Defaults: req.GetDefaults(),
 	})
+	call.Finish(err)
 	if err != nil {
 		r.markProviderUnhealthy(client.region, err)
 		return nil, err
@@ -678,12 +793,12 @@ func (r *CachingRouter) NodeGroupGetOptions(ctx context.Context, req *protos.Nod
 
 func (r *CachingRouter) PricingNodePrice(ctx context.Context, req *protos.PricingNodePriceRequest) (*protos.PricingNodePriceResponse, error) {
 	for _, client := range r.getHealthyClients() {
-		callCtx, cancel := r.backendContext(ctx, client)
-		resp, err := client.client.PricingNodePrice(callCtx, req)
-		cancel()
+		call := r.startBackendRPC(ctx, client, "PricingNodePrice")
+		resp, err := client.client.PricingNodePrice(call.Context(), req)
+		callStatus := call.Finish(err)
 		if err != nil {
 			r.markProviderUnhealthy(client.region, err)
-			klog.Errorf("pricing node price failed for region %s: %v", client.region, err)
+			klog.Errorf("pricing node price failed for %s: %v", callStatus.logValues(), err)
 			continue
 		}
 		r.markProviderHealthy(client.region)
@@ -694,12 +809,12 @@ func (r *CachingRouter) PricingNodePrice(ctx context.Context, req *protos.Pricin
 
 func (r *CachingRouter) PricingPodPrice(ctx context.Context, req *protos.PricingPodPriceRequest) (*protos.PricingPodPriceResponse, error) {
 	for _, client := range r.getHealthyClients() {
-		callCtx, cancel := r.backendContext(ctx, client)
-		resp, err := client.client.PricingPodPrice(callCtx, req)
-		cancel()
+		call := r.startBackendRPC(ctx, client, "PricingPodPrice")
+		resp, err := client.client.PricingPodPrice(call.Context(), req)
+		callStatus := call.Finish(err)
 		if err != nil {
 			r.markProviderUnhealthy(client.region, err)
-			klog.Errorf("pricing pod price failed for region %s: %v", client.region, err)
+			klog.Errorf("pricing pod price failed for %s: %v", callStatus.logValues(), err)
 			continue
 		}
 		r.markProviderHealthy(client.region)
@@ -710,12 +825,12 @@ func (r *CachingRouter) PricingPodPrice(ctx context.Context, req *protos.Pricing
 
 func (r *CachingRouter) GPULabel(ctx context.Context, req *protos.GPULabelRequest) (*protos.GPULabelResponse, error) {
 	for _, client := range r.getHealthyClients() {
-		callCtx, cancel := r.backendContext(ctx, client)
-		resp, err := client.client.GPULabel(callCtx, req)
-		cancel()
+		call := r.startBackendRPC(ctx, client, "GPULabel")
+		resp, err := client.client.GPULabel(call.Context(), req)
+		callStatus := call.Finish(err)
 		if err != nil {
 			r.markProviderUnhealthy(client.region, err)
-			klog.Errorf("gpu label lookup failed for region %s: %v", client.region, err)
+			klog.Errorf("gpu label lookup failed for %s: %v", callStatus.logValues(), err)
 			continue
 		}
 		r.markProviderHealthy(client.region)
@@ -726,12 +841,12 @@ func (r *CachingRouter) GPULabel(ctx context.Context, req *protos.GPULabelReques
 
 func (r *CachingRouter) GetAvailableGPUTypes(ctx context.Context, req *protos.GetAvailableGPUTypesRequest) (*protos.GetAvailableGPUTypesResponse, error) {
 	for _, client := range r.getHealthyClients() {
-		callCtx, cancel := r.backendContext(ctx, client)
-		resp, err := client.client.GetAvailableGPUTypes(callCtx, req)
-		cancel()
+		call := r.startBackendRPC(ctx, client, "GetAvailableGPUTypes")
+		resp, err := client.client.GetAvailableGPUTypes(call.Context(), req)
+		callStatus := call.Finish(err)
 		if err != nil {
 			r.markProviderUnhealthy(client.region, err)
-			klog.Errorf("available gpu types lookup failed for region %s: %v", client.region, err)
+			klog.Errorf("available gpu types lookup failed for %s: %v", callStatus.logValues(), err)
 			continue
 		}
 		r.markProviderHealthy(client.region)

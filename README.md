@@ -126,6 +126,21 @@ Top-level fields:
 
 Durations use Go duration strings such as `5s`, `30s`, or `2m`.
 
+## Router observability
+
+Router mode exposes `/metrics` on `router.httpAddress`. The provider health gauges report current routing state:
+
+- `cluster_autoscaler_provider_router_configured_providers`
+- `cluster_autoscaler_provider_router_healthy_providers`
+- `cluster_autoscaler_provider_router_unhealthy_providers`
+
+Backend RPC metrics report each router-to-provider call by `provider`, `region`, `method`, `grpc_code`, and `outcome`:
+
+- `cluster_autoscaler_provider_router_backend_rpc_total`
+- `cluster_autoscaler_provider_router_backend_rpc_duration_seconds`
+
+The `outcome` label distinguishes `backend_deadline` from `caller_deadline`, which helps separate a slow regional provider from Cluster Autoscaler canceling the router request before all regions finish.
+
 ## Cluster Autoscaler external-gRPC config
 
 Cluster Autoscaler also has its own `--cloud-config` file for the `externalgrpc` cloud provider. That file is separate from this repository's runtime config.
